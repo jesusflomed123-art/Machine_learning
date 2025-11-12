@@ -1,0 +1,326 @@
+---
+title: "Predicción en el caso categórico"
+output: html_document
+---
+<style>
+body {
+  text-align: justify;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+#Limpiamos entorno
+rm(list = ls(all.names = TRUE))
+gc() #Liberamos memoria
+
+knitr::opts_chunk$set(
+	error = F,
+	fig.align = "center",
+	fig.dim = c(10,5),
+	message = FALSE,
+	warning = FALSE,
+	include = FALSE,
+	echo = FALSE
+)
+#Cargamos nuestras librerías 
+library(dplyr)
+library(tidyverse)
+library(patchwork)
+```
+
+```{r data}
+datos =read.csv("https://github.com/jesusflomed123-art/Machine_learning/raw/refs/heads/main/data/DatosTrain_Tarea3.csv")
+str(datos)
+
+datos <- datos %>% mutate(across(c(V1, V2, V3, V4, Y), as.factor))
+str(datos)
+summary(datos)
+```
+
+## Predicción sobre la presencia de una enfermedad
+
+Se nos proporciona una base de datos con 10 variables (V1-V10) que se usarán para predecir la presencia o ausencia de una enfermedad, representado por nuestra variable Y, que es categórica con 2 niveles, donde Y = 0 representa la ausencia de la enfermedad y Y = 1 la presencia de la misma. Al igual podemos comentar que las variables V1 a V4 son variables categóricas de 2 niveles (0 o 1), y las variables V5 a V10 son variables continuas.
+
+```{r analisis_descriptivo, include=TRUE}
+
+grafico1 <- ggplot(data = datos, aes(x = Y, fill = V1)) + 
+  geom_bar(stat = "count", position = "fill") 
+
+grafico2 <- ggplot(data = datos, aes(x = Y, fill = V2)) + 
+  geom_bar(stat = "count", position = "fill") 
+
+grafico3 <- ggplot(data = datos, aes(x = Y, fill = V3)) + 
+  geom_bar(stat = "count", position = "fill") 
+
+grafico4 <- ggplot(data = datos, aes(x = Y, fill = V4)) + 
+  geom_bar(stat = "count", position = "fill") 
+
+grafico5 <- ggplot(data = datos, aes(x = Y, y = V5, fill = Y)) +
+  geom_boxplot() +
+  labs( y = "Valor de V5", x = "Y")
+
+grafico6 <- ggplot(data = datos, aes(x = Y, y = V6, fill = Y)) +
+  geom_boxplot() +
+  labs( y = "Valor de V6", x = "Y")
+
+grafico7 <- ggplot(data = datos, aes(x = Y, y = V7, fill = Y)) +
+  geom_boxplot() +
+  labs( y = "Valor de V7", x = "Y")
+
+grafico8 <- ggplot(data = datos, aes(x = Y, y = V8, fill = Y)) +
+  geom_boxplot() +
+  labs( y = "Valor de V8", x = "Y")
+
+grafico9 <- ggplot(data = datos, aes(x = Y, y = V9, fill = Y)) +
+  geom_boxplot() +
+  labs( y = "Valor de V9", x = "Y")
+
+grafico10 <- ggplot(data = datos, aes(x = Y, y = V10, fill = Y)) +
+  geom_boxplot() +
+  labs( y = "Valor de V10", x = "Y")
+
+# Combina los gráficos uno al lado del otro 
+grafico1 + grafico2 + grafico3 + grafico4 + grafico5 + grafico6 + grafico7 + grafico8 + grafico9 + grafico10
+
+
+```
+Despues de analizar las graficas del chunk "analisis_descriptivo" vimos que las variables se comportan casi igual cuando hay o no presencia de enfermedad 
+
+Entrenemos un modelo y veamos que tan bueno es nuestro poder predictivo y si las variables nos ayudan en algo 
+
+```{r entrenamiento}
+#Usaremos 5-CV y la tasa de clasificaion correcta global como medidad de poder predcitivo
+library(caret)
+set.seed(1)
+Particion = as.data.frame(createFolds(datos$Y, k = 5, list = TRUE, returnTrain = FALSE))
+
+```
+
+```{r efectos_principales}
+mod1 <- glm(Y ~ ., data=datos,   family=binomial(link="logit"))
+summary(mod1)
+
+
+#Medida del poder predictivo
+library(metrica)
+mod1RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  modtr=glm(Y ~ ., data=Dat[train,],   family=binomial(link="logit"))
+  preda=predict(modtr, newdata = Dat[test,], type = "response")
+  predb=ifelse(preda>=.5,levels( Dat$Y)[2],levels( Dat$Y)[1])
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+B=5
+TCC.B.mod1= sapply(1:B,mod1RHM, IndTrain=Particion, Dat=datos)
+(TCC.RHM.mod1=rowMeans(TCC.B.mod1))
+# 0.49375 0.50250 0.48500
+
+```
+
+```{r modelo_interaccion}
+mod2 <- glm(Y ~ .^2, data=datos,   family=binomial(link="logit"))
+summary(mod2)
+
+#Medida del poder predictivo
+mod2RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  modtr=glm(Y ~ .^2, data=Dat[train,],   family=binomial(link="logit"))
+  preda=predict(modtr, newdata = Dat[test,], type = "response")
+  predb=ifelse(preda>=.5,levels( Dat$Y)[2],levels( Dat$Y)[1])
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+TCC.B.mod2= sapply(1:B,mod2RHM, IndTrain=Particion, Dat=datos)
+(TCC.RHM.mod2=rowMeans(TCC.B.mod2))
+# 0.48 0.46 0.50
+
+```
+
+```{r seleccion_variables}
+# Realizamos la selección por pasos con la opción both y empezando con mod1
+library(MASS)
+pen=log(dim(datos[1]))
+mod3 <- stepAIC(mod1, scope =list(upper = ~.^2, lower = ~1), trace =FALSE,direction="both", k=pen)
+summary(mod3)
+
+#Medida del poder predictivo
+mod3RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  assign("DatosAux", Dat[train,], envir = .GlobalEnv) #Cuidado stepAIC busca la base de datos en el environment global 
+  modAux=glm(Y ~ ., data=DatosAux,   family=binomial(link="logit"))
+  penAux=log(dim(DatosAux)[1]) #Penalizacion BIC
+  modtr=stepAIC(modAux, scope =list(upper = ~.^2, lower = ~1), trace =FALSE,direction="both", k=penAux)
+  preda=predict(modtr, newdata = Dat[test,], type = "response")
+  predb=ifelse(preda>=.5,levels( Dat$Y)[2],levels( Dat$Y)[1])
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+TCC.B.mod3=matrix(NA,ncol=B,nrow=3)
+for(ik in 1:B){
+  TCC.B.mod3[,ik]=mod3RHM(ik,IndTrain=Particion, Dat=datos)
+}
+(TCC.RHM.mod3=rowMeans(TCC.B.mod3))
+
+#  0.62875 0.57000 0.68750
+
+
+
+
+```
+
+```{r bernulli-c-log-log}
+mod4_0 =  glm(Y ~ ., data=datos,   family=binomial(link="probit"))
+mod4 <- stepAIC(mod4_0, scope =list(upper = ~.^2, lower = ~1), trace =FALSE,direction="both", k=pen)
+summary(mod4)
+
+#Medida del poder predictivo
+mod4RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  assign("DatosAux", Dat[train,], envir = .GlobalEnv) #Cuidado stepAIC busca la base de datos en el environment global 
+  modAux=glm(Y ~ ., data=DatosAux,   family=binomial(link="cloglog"))
+  penAux=log(dim(DatosAux)[1]) #Penalizacion BIC
+  modtr=stepAIC(modAux, scope =list(upper = ~.^2, lower = ~1), trace =FALSE,direction="both", k=penAux)
+  preda=predict(modtr, newdata = Dat[test,], type = "response")
+  predb=ifelse(preda>=.5,levels( Dat$Y)[2],levels( Dat$Y)[1])
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+TCC.B.mod4=matrix(NA,ncol=B,nrow=3)
+for(ik in 1:B){
+  TCC.B.mod4 [,ik]=mod4RHM(ik,IndTrain=Particion, Dat=datos)
+}
+(TCC.RHM.mod4=rowMeans(TCC.B.mod4))
+# 0.6225 0.5575 0.6875
+
+```
+```{r LDA}
+#LDA
+mod5 <- lda(Y ~ ., datos) #se podr?an dar las f(y) con prior
+mod5p=predict(mod5, datos) # ver que rsultado da el modelo 
+
+#Medicion del poder predictivo 
+mod5RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  mod5t <- lda(Y ~ ., Dat[train,])
+  mod5pt=predict(mod5t, Dat[test,])
+  predb=mod5pt$class
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+TCC.B.mod5= sapply(1:B,mod5RHM, IndTrain=Particion, Dat=datos)
+(TCC.RHM.mod5=rowMeans(TCC.B.mod5))
+# 0.490 0.495 0.485
+
+```
+```{r QDA}
+#QDA
+mod6 <- qda(Y ~ ., datos) 
+mod6p=predict(mod6, datos)
+
+#Medicion del poder predcitivo
+mod6RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  mod6t <- qda(Y ~ ., Dat[train,])
+  mod6pt=predict(mod6t, Dat[test,])
+  predb=mod6pt$class
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+TCC.B.mod6= sapply(1:B,mod6RHM, IndTrain=Particion, Dat=datos)
+(TCC.RHM.mod6=rowMeans(TCC.B.mod6))
+# 0.58 0.54 0.62
+
+```
+
+```{r Naive_classifier}
+library(e1071) 
+mod7 <- naiveBayes(Y ~ ., datos)
+
+#Medicion del poder predcitivo
+mod7RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  modt <-  naiveBayes(Y ~ ., Dat[train,])
+  predb=predict(modt, Dat[test,])
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+TCC.B.mod7= sapply(1:B,mod7RHM, IndTrain=Particion, Dat=datos)
+(TCC.RHM.mod7=rowMeans(TCC.B.mod7))
+# 0.48625 0.51750 0.45500
+
+```
+
+```{r K NN}
+#Vamos a estandarizar nuestras variables continuas
+datos_est <- datos
+vars_est <- paste0("V", 5:10)
+datos_est[vars_est] <- scale(datos[vars_est])
+summary(datos_est[vars_est])
+
+Xmod8 <- model.matrix(Y~.,datos)[,-1]
+Ymod8 <- as.factor(datos$Y)
+
+library(class)
+res8k10=knn(train=Xmod8, test=Xmod8, Ymod8, k = 10, use.all = TRUE)
+# medidad de error aparente
+metrics_summary(obs = datos$Y, pred = res8k10, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+
+
+
+# Medici?n del poder predictivo, se debe incluir tuneo de k
+
+mod8aRHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  Xmod8ttotal = model.matrix(Y~ ., data=Dat)[,-1]
+  Xmod8t = Xmod8ttotal[train, ]
+  Xmod8test = Xmod8ttotal[test, ]
+  Ymod8t = Dat[train,"Y"] 
+  knn.crosst <- tune.knn(x = Xmod8t, y = Ymod8t, k = 1:20,tunecontrol=tune.control(sampling = "cross", cross=5))
+  predb=knn(train=Xmod8t, test=Xmod8test, Ymod8t, k = knn.crosst$best.parameters[[1]], use.all = TRUE)
+  resPod=metrics_summary(obs = Dat[test,"Y"], pred = predb, metrics_list=c("accuracy", "recall", "specificity"),type = 'classification')
+  return(resPod[,2])
+}
+
+set.seed(123)
+TCC.B.mod8a= sapply(1:B,mod8aRHM, IndTrain=Particion, Dat=datos)
+(TCC.RHM.mod8a=rowMeans(TCC.B.mod8a))
+```
+
+```{r, include=TRUE}
+resultados <- rbind(
+  data.frame(Modelo = "Logístico (efectos principales)",     Accuracy = TCC.RHM.mod1[1], Recall = TCC.RHM.mod1[2], Specificity = TCC.RHM.mod1[3]),
+  data.frame(Modelo = "Logístico (interacciones completas)", Accuracy = TCC.RHM.mod2[1], Recall = TCC.RHM.mod2[2], Specificity = TCC.RHM.mod2[3]),
+  data.frame(Modelo = "Logístico (selección de variables)",  Accuracy = TCC.RHM.mod3[1], Recall = TCC.RHM.mod3[2], Specificity = TCC.RHM.mod3[3]),
+  data.frame(Modelo = "Cloglog con selección BIC",            Accuracy = TCC.RHM.mod4[1], Recall = TCC.RHM.mod4[2], Specificity = TCC.RHM.mod4[3]),
+  data.frame(Modelo = "LDA",                                 Accuracy = TCC.RHM.mod5[1], Recall = TCC.RHM.mod5[2], Specificity = TCC.RHM.mod5[3]),
+  data.frame(Modelo = "QDA",                                 Accuracy = TCC.RHM.mod6[1], Recall = TCC.RHM.mod6[2], Specificity = TCC.RHM.mod6[3]),
+  data.frame(Modelo = "Naive Bayes",                         Accuracy = TCC.RHM.mod7[1], Recall = TCC.RHM.mod7[2], Specificity = TCC.RHM.mod7[3]),
+  data.frame(Modelo = "KNN (con tuning)",                    Accuracy = TCC.RHM.mod8a[1], Recall = TCC.RHM.mod8a[2], Specificity = TCC.RHM.mod8a[3])
+)
+
+# Mostrar tabla bonita
+library(knitr)
+kable(resultados, digits = 3, caption = "Comparación del poder predictivo entre modelos")
+
+
+```
+## Conclusiones
+
+
+Hicimos los modelos que se muestran en la tabla anterior  usando 5-CV como nuestra particion, el mejor modelo fue el logistico con seleccion de variables pues tiene la mejor tasa "Accuracy"  y en el resto tambien destaca. El segundo modelo que tiene la mejor tasa es el modelo clolog con seleccion de variables y comparte las mismas interacciones entre variables que el mejor modelo, las cuales son:  V4:V5, V7:V8, V9:V10, V4:V10, V5:V6 y V1:V2. Con lo cual podemos concluir que la seleccion de variables fue importante y que las interacciones antes mencionadas son las que tienen mayor poder predictivo.
