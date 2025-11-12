@@ -1,0 +1,527 @@
+---
+title: "Análisis de variables clínicas para la detección de diabetes"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r cd, include=FALSE}
+library(dplyr)      # Para el manejo de datos
+library(gridExtra)
+library(ggplot2)    # Para realizar gráficas
+library(kableExtra) # Para un mejor manejo de tablas
+library(GGally)     # Para realizar análisis descriptivo fácilmente
+library(multcomp)   # Para pruebas de hipótesis
+library(car)        # Para funciones útiles de modelos de regresión lineal múltiple
+library(broom)      # Para obtener los residuales estandarizados
+library(DHARMa)     # Para la verificación de supuestos
+library(ISLR2)       # Para la base de datos
+library(leaps)      # Para el cálculo de los mejores conjuntos de variables por diversos métodos
+library(bestglm)    # Para obtener el mejor subconjunto
+library(glmnet)     # Para utilizar la penalización Lasso
+library(mlbench) 
+
+data("PimaIndiansDiabetes2")
+help(PimaIndiansDiabetes2)
+
+
+df <- na.omit(PimaIndiansDiabetes2)
+colnames(df)
+str(df)
+summary(df)
+head(df)
+#df$diabetes <- factor(df$diabetes)
+#Vamos a hacer que 1 sea que si desarrola diabetes
+#Y 0 que no la desarrolle
+#df$diabetes <- as.numeric(df$diabetes == "pos")
+```
+
+En este ejercicio, contamos con información acerca de distintos pacientes con características clínicas (número de embarazos, glucosa, presión arterial, grosor del pliegue cutáneo, insulina, índice de masa corporal y función del pedigrí de diabetes) y si desarrollaron o no diabetes. Nuestro objetivo es identificar cuál o cuáles de estas variables son más significativas para determinar si el paciente presenta la enfermedad.
+
+
+```{r incisoi, include=FALSE}
+df$diabetes <- as.numeric(df$diabetes == "pos")
+
+#Mejor subconjunto
+best.logit <- bestglm(df,
+                      IC = "AIC",    #BIC y otras versiones, tambi?n CV para predicci?n                 
+                      family=binomial("logit"),
+                      method = "exhaustive")
+
+summary(best.logit$BestModel)
+coef(best.logit$BestModel)
+AIC(best.logit$BestModel)
+
+# AIC 356.8851
+
+# Forward
+intercepto <- glm(formula = diabetes ~ 1, family=binomial("logit"), data = df)
+
+comp_prin <- glm(formula = diabetes ~ ., family=binomial("logit"), data = df)
+
+#Con esas cotas, podemso proceder con nuestro proceso step
+pasos_forw <- stepAIC(intercepto, scope = list(lower = intercepto, upper = comp_prin), trace = FALSE, direction = "forward", k = log(dim(df)[1]))
+
+summary(pasos_forw)
+AIC(pasos_forw)
+coef(pasos_forw)
+
+#AIC 357.235,357.0683
+
+# Lasso 
+
+library(smurf)
+
+formu <- diabetes ~ p(pregnant, pen = "lasso") + p(glucose, pen = "lasso") +
+  p(pressure, pen = "lasso") + p(triceps, pen = "lasso") +
+  p(insulin, pen = "lasso") + p(mass, pen = "lasso") +
+  p(pedigree, pen = "lasso") + p(age, pen = "lasso")
+
+
+
+
+df_ep.fit <- glmsmurf(formula = formu, family = binomial("logit"), data = df, 
+                        pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+plot(df_ep.fit, cex=3)
+
+
+summary(df_ep.fit)
+AIC(df_ep.fit)
+coef(df_ep.fit)
+
+#AIC 357.0683
+
+
+```
+
+```{r logitinter, include=FALSE}
+
+# METODO POR PASOS FORWARD
+
+#Para estos procesos vamos a necesitar dos ajustes que servirán como cotas
+intercepto_logit <- glm(formula = diabetes ~ 1, family=binomial("logit"), data = df)
+
+compuesto_logit <- glm(formula = diabetes ~ .^2 + I(pregnant^2) + I(glucose^2) + I(pressure^2)
+                  + I(triceps^2) + I(insulin^2) + I(mass^2) + I(pedigree^2) + I(age^2)
+                  ,family=binomial("logit"), data = df)
+
+#Con esas cotas, podemso proceder con nuestro proceso step
+pasos_forw_2 <- stepAIC(intercepto_logit, scope = list(lower = intercepto_logit, upper = compuesto_logit), trace = FALSE, direction = "forward", k = log(dim(df)[1]))
+
+summary(pasos_forw_2)
+AIC(pasos_forw_2)
+coef(pasos_forw_2)
+# AIC 346.80069,338.34
+
+
+
+
+### LASSO 
+#Quitas la variable y 
+variables <- colnames(df)[colnames(df) != "diabetes"]
+
+df2<-df
+
+#Para las interacciones
+for (i in 1:(length(variables) - 1)) {
+  for (j in (i + 1):length(variables)) {
+    nombre <- paste0(variables[i], "_", variables[j])
+    df2[[nombre]] <- df2[[variables[i]]] * df2[[variables[j]]]
+  }
+}
+
+#Para los cuadrados
+for (var in variables) {
+  nombre2 <- paste0(var, "_sq")
+  df2[[nombre2]] <- df2[[var]]^2
+}
+
+
+#Para los componentes principales
+comp_prin <- paste0("p(", variables, ", pen = 'lasso')", collapse = " + ")
+
+# Interacciones y términos cuadráticos ya creados en el dataframe
+inter <- setdiff(colnames(df2), c("diabetes",variables))
+variables2 <- paste0("p(", inter, ", pen = 'lasso')", collapse = " + ")
+
+# Unir los términos en una sola fórmula
+form<- as.formula(paste("diabetes ~", paste(comp_prin, variables2, sep = " + ")))
+
+
+
+df_cuadrados.fit <- glmsmurf(formula = form, family = binomial("logit"), data = df2, 
+                      pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+
+plot_lambda(df_cuadrados.fit)
+df_cuadrados.fit$lambda
+log(df_cuadrados.fit$lambda)
+plot(df_cuadrados.fit, cex=3)
+summary(df_cuadrados.fit)
+AIC(df_cuadrados.fit)
+coef(df_cuadrados.fit)
+coeficientes <- coef(df_cuadrados.fit)
+coeficientes[coeficientes != 0]
+#AIC DE 338.34
+```
+
+
+```{r probitcloglogmejorsub, include=FALSE}
+## Mejor subconjunto 
+best.probit <- bestglm(df,
+                      IC = "AIC",    #BIC y otras versiones, tambi?n CV para predicci?n                 
+                      family=binomial("probit"),
+                      method = "exhaustive")
+
+summary(best.probit$BestModel)
+AIC(best.probit$BestModel)
+#AIC de 357.5513
+
+best.cloglog <- bestglm(df,
+                       IC = "AIC",    #BIC y otras versiones, tambi?n CV para predicci?n                 
+                       family=binomial("cloglog"),
+                       method = "exhaustive")
+
+summary(best.cloglog$BestModel)
+AIC(best.cloglog$BestModel)
+#AIC 367.5355
+
+
+```
+
+```{r forwardcp, include=FALSE}
+
+#Probit 
+intercepto_probit <- glm(formula = diabetes ~ 1, family=binomial("probit"), data = df)
+
+compuesto_probit <- glm(formula = diabetes ~ .^2 + I(pregnant^2) + I(glucose^2) + I(pressure^2)
+                  + I(triceps^2) + I(insulin^2) + I(mass^2) + I(pedigree^2) + I(age^2)
+                  ,family=binomial("probit"), data = df)
+probir_mod <- stepAIC(intercepto_probit, scope = list(lower = intercepto_probit, upper = compuesto_probit), trace = FALSE, direction = "forward", k = log(dim(df)[1]))
+
+AIC(probir_mod ) #AIC 351.3917
+
+
+#cloglog
+
+intercepto_cloglog <- glm(formula = diabetes ~ 1, family=binomial("cloglog"), data = df)
+
+compuesto_cloglog <- glm(formula = diabetes ~ .^2 + I(pregnant^2) + I(glucose^2) + I(pressure^2)
+                  + I(triceps^2) + I(insulin^2) + I(mass^2) + I(pedigree^2) + I(age^2)
+                  ,family=binomial("cloglog"), data = df)
+pasos_forw_3 <- stepAIC(intercepto_cloglog, scope = list(lower = intercepto_cloglog, upper = compuesto_cloglog), trace = FALSE, direction = "forward", k = log(dim(df)[1]))
+
+AIC(pasos_forw_3) #AIC 370.1866
+
+
+
+```
+```{r lasso_cp_probitcloglog, include=FALSE}
+
+formu <- diabetes ~ p(pregnant, pen = "lasso") + p(glucose, pen = "lasso") +
+  p(pressure, pen = "lasso") + p(triceps, pen = "lasso") +
+  p(insulin, pen = "lasso") + p(mass, pen = "lasso") +
+  p(pedigree, pen = "lasso") + p(age, pen = "lasso")
+
+
+
+df_ep_probit.fit <- glmsmurf(formula = formu, family = binomial("probit"), data = df, 
+                      pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+df_ep_cloglog.fit <- glmsmurf(formula = formu, family = binomial("cloglog"), data = df, 
+                              pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+AIC(df_ep_probit.fit)
+AIC(df_ep_cloglog.fit)
+#AIC PROBIT 357.8682
+#AIC cloglog 371.093
+
+```
+
+
+```{r lasso_cuadrados_cloglogprobit, include=FALSE}
+
+#lasoo
+df_cuadrados_cloglog.fit <- glmsmurf(formula = form, family = binomial("cloglog"), data = df2, 
+                             pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+
+df_cuadrados_probit.fit <- glmsmurf(formula = form, family = binomial("probit"), data = df2, 
+                             pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+
+AIC(df_cuadrados_cloglog.fit) #AIC 355.75
+AIC(df_cuadrados_probit.fit) #AIC 342.83
+
+```
+
+
+```{r logaritmo_cp_mejor_sub, include=FALSE}
+
+df_log <- df
+trans <-  colnames(df)[colnames(df) != "diabetes"]
+df_log[,trans] <- log1p(df[,trans])
+summary(df_log)
+
+
+#### Componentes principales 
+best_log.logit <- bestglm(df_log,
+                      IC = "AIC",    #BIC y otras versiones, tambi?n CV para predicci?n                 
+                      family=binomial("logit"),
+                      method = "exhaustive")
+
+best_log.cloglog <- bestglm(df_log,
+                          IC = "AIC",    #BIC y otras versiones, tambi?n CV para predicci?n                 
+                          family=binomial("cloglog"),
+                          method = "exhaustive")
+
+best_log.probit <- bestglm(df_log,
+                            IC = "AIC",    #BIC y otras versiones, tambi?n CV para predicci?n                 
+                            family=binomial("probit"),
+                            method = "exhaustive")
+AIC(best_log.logit$BestModel)#350.72
+AIC(best_log.cloglog$BestModel) #362.704
+AIC(best_log.probit$BestModel) #351.78
+
+```
+
+```{r logaritmo_cp_forward, include=FALSE}
+
+#Para estos procesos vamos a necesitar dos ajustes que servirán como cotas
+logit_log <- glm(formula = diabetes ~ 1, family=binomial("logit"), data = df_log)
+
+mod_logit_log <- glm(formula = diabetes ~ .^2 + I(pregnant^2) + I(glucose^2) + I(pressure^2)
+                  + I(triceps^2) + I(insulin^2) + I(mass^2) + I(pedigree^2) + I(age^2)
+                  ,family=binomial("logit"), data = df_log)
+
+df_ep_logit.step <- stepAIC(logit_log, scope = list(lower = logit_log, upper = mod_logit_log), trace = FALSE, direction = "forward", k = log(dim(df_log)[1]))
+
+AIC(df_ep_logit.step ) #AIC 348.92
+coef(df_ep_logit.step)
+
+#Probit
+probit_log <- glm(formula = diabetes ~ 1, family=binomial("probit"), data = df_log)
+
+mod_probit_log <- glm(formula = diabetes ~ .^2 + I(pregnant^2) + I(glucose^2) + I(pressure^2)
+                  + I(triceps^2) + I(insulin^2) + I(mass^2) + I(pedigree^2) + I(age^2)
+                  ,family=binomial("probit"), data = df_log)
+
+df_ep_probit.step <- stepAIC(probit_log, scope = list(lower = probit_log, upper = mod_probit_log ), trace = FALSE, direction = "forward", k = log(dim(df_log)[1]))
+
+AIC(df_ep_probit.step ) #AIC 350.15
+
+
+
+#cloglog
+cloglog_log <- glm(formula = diabetes ~ 1, family=binomial("cloglog"), data = df_log)
+
+mod_cloglog_log <- glm(formula = diabetes ~ .^2 + I(pregnant^2) + I(glucose^2) + I(pressure^2)
+                  + I(triceps^2) + I(insulin^2) + I(mass^2) + I(pedigree^2) + I(age^2)
+                  ,family=binomial("cloglog"), data = df_log)
+
+df_ep_cloglog.step <- stepAIC(probit_log, scope = list(lower = probit_log, upper = mod_probit_log ), trace = FALSE, direction = "forward", k = log(dim(df_log)[1]))
+
+AIC(df_ep_cloglog.step ) #AIC 350.15
+
+```
+
+
+```{r logaritmo_cp_lasso, include=FALSE}
+##lasso
+df_ep_log_logit.fit <- glmsmurf(formula = formu, family = binomial("logit"), data = df_log, 
+                      pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+df_ep_log_cloglog.fit <- glmsmurf(formula = formu, family = binomial("cloglog"), data = df_log, 
+                      pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+df_ep_log_probit.fit <- glmsmurf(formula = formu, family = binomial("probit"), data = df_log, 
+                      pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+
+AIC(df_ep_log_logit.fit) #350.7547
+AIC(df_ep_log_cloglog.fit) #364.0685
+AIC(df_ep_log_probit.fit)  #351.8261
+
+```
+
+
+```{r logaritmo_cuadrados_lasso, include=FALSE}
+
+#Agregas las columnas en la tabla df_log
+
+for (i in 1:(length(variables) - 1)) {
+  for (j in (i + 1):length(variables)) {
+    nombre <- paste0(variables[i], "_", variables[j])
+    df_log[[nombre]] <- df_log[[variables[i]]] * df_log[[variables[j]]]
+  }
+}
+
+#Para los cuadrados
+for (var in variables) {
+  nombre2 <- paste0(var, "_sq")
+  df_log[[nombre2]] <- df_log[[var]]^2
+}
+
+#Ya se puede ocupar formu 
+df_cuadrado_log_logit.fit <- glmsmurf(formula = form, family = binomial("logit"), data = df_log, 
+                                pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+df_cuadrado_log_cloglog.fit <- glmsmurf(formula = form, family = binomial("cloglog"), data = df_log, 
+                                  pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+df_cuadrado_log_probit.fit <- glmsmurf(formula = form, family = binomial("probit"), data = df_log, 
+                                 pen.weights = "glm.stand", lambda = "is.aic", control=list(lambda.length=200, reest = TRUE, lambda.reest=TRUE))
+
+
+AIC(df_cuadrado_log_logit.fit) #349.8722
+AIC(df_cuadrado_log_cloglog.fit) #354.5638
+AIC(df_cuadrado_log_probit.fit)  #354.5893
+
+
+
+
+```
+Aplicamos una serie de métodos para identificar el mejor modelo según el AIC. Para ello, utilizamos la familia binomial con tres ligas: logit, probit y cloglog. Además, consideramos tres métodos de selección de variables: mejor subconjunto, método forward y penalización Lasso. Por último, realizamos un preprocesamiento en el que aplicamos el logaritmo a algunas variables.
+
+Para presentar los resultados de manera clara, mostramos la siguiente tabla:
+
+
+ Con liga logit:
+```{r TablaAIC, echo=FALSE, results='asis'}
+#Guardamos los datos
+data.frame("Preprocesamiento"=c("No","No","No","No","No","logaritmo","logaritmo","logaritmo","logaritmo"),
+           "Modelo" = c("Mejor subconjunto: componentes principales","Step forward: componentes principales", "lasso: componentes principales"
+                        ,"Step forward: interacciones y cadrados","lasso: interacciones y cuadrados",
+                        "Mejor subconjunto: componentes principales","Step forward: interacciones y cuadrados", "lasso: componentes principales"
+                        ,"lasso: interacciones y cuadrados"),
+          "AIC" = c(356.88,357.23,357.06,346.80,338.34,350.72,348.92,350.75,349.87))%>% 
+  #Volvemos tabla
+  kbl(booktabs = TRUE, align = "c") %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"))
+
+```
+
+
+Con liga probit:
+```{r TablaAICprobit, echo=FALSE, results='asis'}
+#Guardamos los datos
+data.frame("Preprocesamiento"=c("No","No","No","No","logaritmo","logaritmo","logaritmo","logaritmo"),
+           "Modelo" = c("Mejor subconjunto: componentes principales","Step forward: interacciones y cadrados", "lasso: componentes principales"
+                        ,"lasso: interacciones y cuadrados",
+                        "Mejor subconjunto: componentes principales","Step forward: interacciones y cuadrados", "lasso: componentes principales"
+                        ,"lasso: interacciones y cuadrados"),
+          "AIC" = c(357.55,351.39,357.86,342.83,351.78,350.16,351.82,354.58))%>% 
+  #Volvemos tabla
+  kbl(booktabs = TRUE, align = "c") %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"))
+
+```
+
+Con liga cloglog:
+
+```{r TablaAICcloglog, echo=FALSE, results='asis'}
+#Guardamos los datos
+data.frame("Preprocesamiento"=c("No","No","No","No","logaritmo","logaritmo","logaritmo","logaritmo"),
+           "Modelo" = c("Mejor subconjunto: componentes principales","Step forward: interacciones y cadrados", "lasso: componentes principales"
+                        ,"lasso: interacciones y cuadrados",
+                        "Mejor subconjunto: componentes principales","Step forward: interacciones y cuadrados", "lasso: componentes principales"
+                        ,"lasso: interacciones y cuadrados"),
+          "AIC" = c(367.53,370.18,371.09,355.75,362.70,350.15,364.06,354.56))%>% 
+  #Volvemos tabla
+  kbl(booktabs = TRUE, align = "c") %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"))
+
+```
+
+
+
+Ahora, con el de menor AIC procedemos a ajustar un modelo utilizando la familia binomial con liga logit, penalización lasso y considerando componentes principales, interacciones y términos cuadráticos. Como resultado, obtenemos las siguientes variables:
+
+```{r pi, include=FALSE}
+
+modelo2 <- glm(diabetes~glucose + pressure + mass + pedigree + age +pregnant*glucose+pregnant*age +
+                         glucose*pressure + glucose*triceps + glucose*mass + pressure*insulin + pressure*age + triceps*mass + triceps*age + insulin*pedigree + insulin*age + I(pregnant^2) + I(age^2), family = binomial("logit"), data = df)
+AIC(modelo2)
+
+```
+
+
+```{r, echo=FALSE}
+coeficientes <- coef(df_cuadrados.fit)
+coeficientes[coeficientes != 0]
+```
+Observamos que, a medida que aumentan la glucosa,presión arterial,el índice de masa corporal, la predisposición hereditaria a desarrollar la enfermedad y la edad, también aumenta la probabilidad de padecer diabetes. Esto se puede visualizar claramente en las siguientes gráficas.
+
+
+```{r g1, echo=FALSE, fig.width=5, fig.height=3, fig.align='center'} 
+df$diabetes <- ifelse(df$diabetes == 1, "positivo", "negativo")
+
+graf1 <- ggplot(df, aes(x = diabetes, y = glucose, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("green", "skyblue")) +
+  labs(x = "Diabetes", y = "Nivel de Glucosa") +
+  theme_minimal()
+
+graf2 <- ggplot(df, aes(x = diabetes, y = pressure, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("green", "skyblue")) +
+  labs(x = "Diabetes", y = "Presión arterial") +
+  theme_minimal()
+
+
+
+grid.arrange(graf1, graf2,  ncol = 2)
+```
+
+
+
+```{r g2, echo=FALSE, fig.width=5, fig.height=3, fig.align='center'} 
+
+graf1 <- ggplot(df, aes(x = diabetes, y = pedigree, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("green", "skyblue")) +
+  labs(x = "Diabetes", y = "Herencia") +
+  theme_minimal()
+
+graf2 <- ggplot(df, aes(x = diabetes, y = mass, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("green", "skyblue")) +
+  labs(x = "Diabetes", y = "índice masa corporal") +
+  theme_minimal()
+
+grid.arrange(graf2, graf1, ncol = 2)
+
+```
+
+```{r g3, echo=FALSE, fig.width=5, fig.height=3, fig.align='center'} 
+
+graf15 <- ggplot(df, aes(x = diabetes, y = age, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("green", "skyblue")) +
+  labs(x = "Diabetes", y = "Edad") +
+  theme_minimal()
+
+graf15
+
+```
+
+
+
+En las gráficas, podemos observar cómo los cuadros azules se sitúan más arriba que los verdes, lo que indica que, a medida que estas variables aumentan, también incrementa la probabilidad de desarrollar la enfermedad.
+
+
+
+
+
+
+
+
+
+
+
+
