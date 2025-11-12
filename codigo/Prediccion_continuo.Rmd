@@ -1,0 +1,311 @@
+---
+title: "Porcentaje de grasa corporal en hombres. Un análisis exhaustivo"
+geometry: margin=1.5cm
+---
+
+<style>
+body {
+  text-align: justify;
+}
+</style>
+
+
+
+Al hablar de la información con la que vamos a trabajar, contamos con 252 datos en los cuales se registra el porcentaje de grasa corporal en hombres que es medido con la ayuda de datos como lo puede ser la edad, peso, altura, circunferencia tanto de pecho, abdomen, cadera, muslo, rodilla, tobillo, bicep, antebrazo, muñeca, etc.
+
+Entonces, en base a estos datos, procederemos a hacer un modelo lineal generalizado
+
+```{r ExplData, echo=FALSE, include=FALSE}
+' Cargamos las paqueterías necesarias para trabajar en nuestro ejercicio ' 
+library (ISLR)
+library(caret)
+library(tidyverse)
+library(MASS)
+library(glmnet)
+#library(tidymodels)
+library(faraway)
+
+df <- subset(fat, select=-c(siri,density,free))
+# Limpieza de datos de la bd
+
+#Borrar los 0 en los 
+df <- df[df$brozek!=0,]
+colnames(df)
+#Borrar los datos raros en heght y weight basandonos en el boxplor
+boxplot(df$weight, main = "Boxplot de Weight", ylab = "Peso (lbs)")
+boxplot(df$height, main = "Boxplot de height", ylab = "altura (pulgadas)")
+#Como podemos ver en los boxplot, tenemos unos tipos de outliers tanto en estatura como en peso que, a primera instancia son raros en comparación con los otros datos, así que los quitaremos para seguir trabajando.
+
+box_stats_weight <- boxplot.stats(df$weight)
+outliers_weight <- box_stats_weight$out
+
+box_stats_height <- boxplot.stats(df$height)
+outliers_height <- box_stats_height$out
+
+
+df <- df %>%
+  filter(!(weight %in% outliers_weight),   
+         !(height %in% outliers_height),  
+         brozek != 0)     
+```
+
+```{r corrData, echo=FALSE}
+# Calculamos la matriz de correlación
+cor_vals <- cor(df[, sapply(df, is.numeric)], use = "complete.obs")
+cor_target <- cor_vals["brozek", ]
+cor_target_sorted <- sort(cor_target[-which(names(cor_target) == "brozek")], decreasing = TRUE)
+
+# Graficamos la correlación
+barplot(cor_target_sorted, las = 2, col = "steelblue", 
+        main = "Correlación de variables con brozek", ylab = "Correlación")
+
+```
+
+Gracias a lo visto en el chunk *r corrData* podemos ver que, en relación a la variable del porcentaje de grasa corporal en hombres, tendrá una gran correlación con los datos que nos hablan de las circunferencias (abdominal, pectoral, etc.) y adipos.
+
+Ahora bien, para empezar a poder analizar nuestros diferentes modelos, tendremos que partiremos nuestros datos en dos, el 80% de ellos lo usaremos para poder entrenar nuestro modelo elegido y el 20% será para aplicar este modelo y estimar el poder de predicción, repitiéndolo 50 veces.
+
+En nuestro primer intento, haremos un modelo lineal generalizado para una distribución gaussiana con una liga identidad, cosa que se puede apreciar en el chunk *r mlgCP*.
+
+```{r mlgCP, echo=FALSE}
+
+#Ajustamos un modelo lineal generalizado para una distribución gaussiana con una liga identidad, esto ya con los datos analizados.
+mod_cp <- glm(brozek ~ ., family = gaussian(link="identity"), data = df)
+cp_11 <- summary(mod_cp)
+
+# Supongamos que queremos aplicar el m?todo
+# repeated holdout method
+# B=100, train (80%) y test (20%)
+# y calcular MSE y R2 como medidas de poder predictivo
+
+n=dim(df)[1]
+set.seed(1)
+B=50
+#Calculamos los 100 ejemplos del train 
+IndexTrain = replicate(B, sample(1:n, n*.8))
+Partition<- createDataPartition(df$brozek, p = .80, groups =4,
+                                list = FALSE, times = B)
+#La función para calcular el mse y r^2 de cada iteración
+
+mod1RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  mod1t=glm(brozek ~ .,family = gaussian(link="identity"), Dat[train,])
+  predm1t=predict(mod1t, Dat[test,])
+  MSE=mean((Dat$brozek[test]-predm1t)^2)
+  R2 =cor(df$brozek[test],predm1t)^2
+  MAE = mean(abs(Dat$brozek[test] - predm1t))
+  return(c(MSE,MAE,R2))
+}
+
+set.seed(1)
+MSE.B.mod1= sapply(1:B,mod1RHM, IndTrain=Partition, Dat=df)
+# primer rengl?n es el MSE y segundo el R2
+
+summCP <- summary(t(MSE.B.mod1)) #ver la variabilidad entre las 100 repeticiones
+
+# Estimaci?n del poder predictivo usando
+# MSE, R2 y Repeated holdout method es
+mse_1 <- (MSE.RHM.mod1=mean(MSE.B.mod1[1,])) #16.45
+mae_1 <- (MAE.RHM.mod1=mean(MSE.B.mod1[2,])) #3.35
+r2_1 <- (R2.RHM.mod1=mean(MSE.B.mod1[3,]))  #0.71
+
+```
+
+En el siguiente, nos adentraremos al siguiente modelos haciendo lo mismo que en el anterior, solamente que aquí consideraremos variables al cuadrado. 
+
+```{r modCuad, echo=FALSE, include=FALSE}
+
+(continuas = names(df %>% select_if(~is.numeric(.x))) )
+xnames=continuas[!continuas %in%  c("brozek")]
+
+
+formula_cuadrados = as.formula(  paste('brozek~ .^2',"+", paste('I(',xnames,'^2)',collapse = ' + ') ) ) 
+
+mod1_cuadrados <- glm(formula_cuadrados, family = gaussian(link="identity"), data = df)
+sum22 <- summary(mod1_cuadrados)
+
+#Cálculo del poder predictivo
+mod_cuadrados=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  mod1t=glm(formula_cuadrados,family = gaussian(link="identity"), Dat[train,])
+  predm1t=predict(mod1t, Dat[test,])
+  MSE=mean((Dat$brozek[test]-predm1t)^2)
+  MAE=mean(abs(Dat$brozek[test]-predm1t))
+  R2 =cor(df$brozek[test],predm1t)^2
+  return(c(MSE,MAE,R2))
+}
+
+set.seed(1)
+MSE_cuadrados= sapply(1:B,mod_cuadrados, IndTrain=Partition, Dat=df)
+sum2 <- summary(t(MSE_cuadrados)) 
+
+mse_2 <- (MSE.RHM.mod1=mean(MSE_cuadrados[1,])) #125
+mae_2 <- (MAE.RHM.mod1=mean(MSE_cuadrados[2,]))  #6.47
+r2_2 <- (R2.RHM.mod1=mean(MSE_cuadrados[3,]))  #0.25
+
+```
+
+Después, haremos una selección de variables con el criterio de BIC
+
+```{r modBIC, echo=FALSE}
+
+pen=log(dim(df)[1])
+
+mod_BIC <- stepAIC(mod_cp, scope =list(upper = mod1_cuadrados, lower = mod_cp), trace =FALSE,direction="forward", k=pen)
+sum_33 <- summary(mod_BIC) 
+
+mod2RHM=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  assign("DatosAux", Dat[train,], envir = .GlobalEnv) #Cuidado stepAIC busca la base de datos en el environment global 
+  modAux=glm(brozek ~ ., data=DatosAux,   family=gaussian(link="identity"))
+  modAux2=glm(formula_cuadrados, data=DatosAux,   family=gaussian(link="identity"))
+  penAux=log(dim(DatosAux)[1])
+  modtr=stepAIC(modAux, scope =list(upper = modAux2, lower = modAux), trace =FALSE,direction="forward", k=penAux)
+  preda=predict(modtr, newdata = Dat[test,])
+  MSE = mean((Dat$brozek[test]-preda)^2)
+  MAE = mean(abs(Dat$brozek[test]-preda))
+  R2 = cor(df$brozek[test],preda)^2
+  return(c(MSE,MAE,R2))
+}
+
+set.seed(1)
+MSE_BIC= sapply(1:B,mod2RHM, IndTrain=Partition, Dat=df)
+sum_3 <- summary(t(MSE_BIC)) 
+
+mse_3 <- (MSE.RHM.mod1=mean(MSE_BIC[1,])) #18.50
+mae_3 <- (MAE.RHM.mod1=mean(MSE_BIC[2,])) #3.50
+r2_3 <- (R2.RHM.mod1=mean(MSE_BIC[3,]))  #0.68
+```
+
+Ahora, como siguiente intento haremos una selección de variables con el método Lasso.
+
+```{r modLasso, echo=FALSE, include=FALSE, warning=FALSE}
+
+Xmod4 <- model.matrix(formula_cuadrados, data=df)[,-1]
+Ymod4 <- df[,"brozek"] 
+
+#recordar que para lasso alpha=1 
+#por otro lado hay dos opciones de estimadores, 
+# relax = FALSE esto por default (lo usaremos por ahora)
+# recordar que esos no son EMV
+
+mod4.lasso = glmnet(Xmod4, Ymod4, family = gaussian(link="identity"), nlambda = 200)
+#Faltaria tunear (definir valor) de lambda
+
+#glmnet tiene una opcion para tunear usando K-CV
+# type.measure="auc" area under the ROC curve 
+set.seed(1)
+mod4.lasso.tun=cv.glmnet(Xmod4, Ymod4, nfolds = 5, type.measure ="mse", gamma = 0, relax = FALSE, family = "gaussian"("identity"), nlambda = 50)
+print.cv.glmnet(mod4.lasso.tun)
+mod4.lasso.tun$lambda.min  
+coef(mod4.lasso.tun, s = "lambda.min")
+
+# ~~~~~~~~~~~~~ Poder predictivo
+
+mod4RHM=function(x, IndTrain, Dat, forme){
+  train= IndTrain[,x]
+  test = (-train)
+  Xmod4ttotal = model.matrix(forme, data=df)[,-1]
+  Xmod4t = Xmod4ttotal[train, ]
+  Ymod4t = Dat[train,"brozek"] 
+  mod4t.lasso.tun=cv.glmnet(Xmod4t, Ymod4t, nfolds = 5, type.measure ="mse", gamma = 0, relax = FALSE, family = gaussian("identity"), nlambda = 50)
+  predte=predict(mod4t.lasso.tun, newx = Xmod4ttotal[test,], type = "response", s = "lambda.min")
+  MSE=mean((Dat$brozek[test]-predte)^2)
+  MAE=mean(abs(Dat$brozek[test]-predte))
+  R2 = cor(df$brozek[test],predte)^2
+  return(c(MSE,MAE,R2))
+}
+
+set.seed(1)
+MSE.B.mod4= sapply(1:B,mod4RHM, IndTrain=Partition, Dat=df, forme=formula_cuadrados)
+
+mse_4 <- (MSE.RHM.mod4=mean(MSE.B.mod4[1,])) # 15.77
+mae_4 <- (MAE.RHM.mod4=mean(MSE.B.mod4[2,])) # 3.27
+r2_4 <- (R2.RHM.mod4=mean(MSE.B.mod4[3,])) # 0.72
+
+```
+
+Finalmente, a la hora de hacer el último modelo, tenemos que será hacer una selección de variables de un modelo lineal generalizado de distribución gamma y liga identidad con variables al cuadrado.
+
+```{r modGamma, echo=FALSE, include=FALSE, warning=FALSE}
+
+mod_cp_gamma <- glm(brozek ~ ., family = Gamma(link="log"), data = df)
+summary(mod_cp_gamma)
+
+mod_cuadrados_gamma <- glm(formula_cuadrados, family = Gamma(link="log"), data = df)
+summary(mod_cuadrados_gamma)
+
+pen=log(dim(df)[1])
+
+mod_BIC_gamma <- stepAIC(mod_cp_gamma, scope =list(upper = mod_cuadrados_gamma, lower = mod_cp_gamma), trace =FALSE,direction="forward", k=pen)
+summary(mod_BIC_gamma) 
+
+#~~~~~~~~~~~~ Poder predictivo 
+mod2RHM_gamma=function(x, IndTrain, Dat){
+  train= IndTrain[,x]
+  test = (-train)
+  assign("DatosAux", Dat[train,], envir = .GlobalEnv) #Cuidado stepAIC busca la base de datos en el environment global 
+  modAux=glm(brozek ~ ., data=DatosAux,   family=Gamma(link="identity"))
+  modAux2=glm(formula_cuadrados, data=DatosAux,   family=Gamma(link="identity"))
+  penAux=log(dim(DatosAux)[1])
+  modtr=stepAIC(modAux, scope =list(upper = modAux2, lower = modAux), trace =FALSE,direction="forward", k=penAux)
+  preda=predict(modtr, newdata = Dat[test,])
+  MSE = mean((Dat$brozek[test]-preda)^2)
+  MAE = mean(abs(Dat$brozek[test]-preda))
+  R2 = cor(df$brozek[test],preda)^2
+  return(c(MSE,MAE,R2))
+}
+
+set.seed(1)
+MSE_BIC_gamma= sapply(1:B,mod2RHM_gamma, IndTrain=Partition, Dat=df)
+summary(t(MSE_BIC_gamma)) 
+
+mse_5 <- (MSE.RHM.mod1_gamma=mean(MSE_BIC_gamma[1,])) #20.16
+mae_5 <- (MAE.RHM.mod1_gamma=mean(MSE_BIC_gamma[2,]))  #3.64
+r2_5 <- (R2.RHM.mod1_gamma=mean(MSE_BIC_gamma[3,])) #.66
+
+```
+
+Si representamos en una tabla los valores de cada medición para cada modelo, tenemos los siguientes valores:
+
+```{r tabla, echo=FALSE}
+
+resumen <- data.frame(
+  Modelo = paste0("Modelo ", 1:5),
+  MSE = c(mse_1, mse_2, mse_3, mse_4, mse_5),
+  MAE = c(mae_1, mae_2, mae_3, mae_4, mae_5),
+  R2 = c(r2_1, r2_2, r2_3, r2_4, r2_5)
+)
+
+# Mostrar la tabla con knitr::kable (simple)
+knitr::kable(resumen, caption = "Medidas de desempeño por modelo", digits = 2)
+
+```
+
+Notamos que hay algunas variables que se repiten en la mayoría de los modelos, las cuales parecen tener un mayor poder predictivo sobre el resto de variables. Dichas variables son: age, abdom, wrist y neck.
+
+Si vamos modelo a modelo tendremos varias interpretaciones. 
+
+En el primero,  gracias a lo visto en el R^2 por ejemplo, esto nos indica que el modelo parece ser un buen resultado y con ayuda de lo visto en el MSE y MAE podemos ver que no parece haber un problema de sobreajuste, por lo que a priori el modelo parece ser bueno. 
+
+Al hablar del segundo, en el chunk *r modCuad* podemos ver que es un comportamiento bastante peor en comparación al anterior modelo, en el R^2 notamos que es un nivel bajo, por lo que con esto, junto a las otras medidas, nos hace poder concluir que este modelo es el peor de todos, así que este lo descartamos.
+
+En el tercero, en el chunk *r modBIC* podemos volver a ver un buen comportamiento por parte del modelo, teniendo un R^2 parecido al primero, por lo que con esto, sumado a los resultados en el MSE y MAE tenemos que lo podríamos considerar como un buen modelo, pero si lo volvemos a comparar con el primer modelo, tenemos que sigue siendo mejor el otro.
+
+Al ver el cuarto, vemos que para este modelo en todo mejora al primer modelo, tiene un menor MSE y MAE, lo cual indica mejoría y un mayor R^2 , lo cual nos hace decantarnos al modelo Lasso como el mejor modelo de todos, sobre todo porque al  momento de ver el quinto modelo, no supera al Lasso.
+
+De acuerdo con las métricas que usamos para evaluar el poder predictivo de los modelos, concluimos que el mejor modelo fue el 4to:
+
+De acuerdo con las métricas que usamos para evaluar el poder predictivo de los modelos, concluimos que el mejor modelo fue el 4to:
+
+$$\hat{y} = \beta_0 + \beta_1 (\text{abdom}) + \beta_2 (\text{age}) (\text{thigh}) + \beta_3 (\text{age}) (\text{ankle}) + \beta_4 (\text{age}) (\text{biceps}) + \beta_5 (\text{height}) (\text{neck}) + \beta_6 (\text{height}) (\text{wrist}) $$
+$$+ \beta_7 (\text{neck}) (\text{wrist}) + \beta_8 (\text{abdom}) (\text{forearm})$$
+
+
+Al hablar acerca del poder predictivo, el modelo elegido, es decir, el Lasso muestra un buen poder predictivo, pues no solo agarrará las variables más relevantes, sino que también minimiza el riesgo de sobreajuste.
+
+
+
