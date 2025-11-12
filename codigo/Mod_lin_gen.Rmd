@@ -1,0 +1,253 @@
+---
+title: ""
+output:
+  html_document: default
+  pdf_document: default
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Inferencia sobre el uso de 3 insecticidas, a partir de su dosis. 
+
+
+```{r cd, include=FALSE}
+library(dplyr)      # Para el manejo de datos
+library(ggplot2)    # Para realizar gráficas
+library(kableExtra) # Para un mejor manejo de tablas
+library(GGally)     # Para realizar análisis descriptivo fácilmente
+library(multcomp)   # Para pruebas de hipótesis
+library(car)        # Para funciones útiles de modelos de regresión lineal múltiple
+library(broom)      # Para obtener los residuales estandarizados
+library(purrr)
+
+ # df <- read.csv("C:/Users/jesus/Downloads/Preg3vA.csv")
+df <- read.csv("https://github.com/jesusflomed123-art/Machine_learning/raw/refs/heads/main/data/Preg3vA.csv")
+head(df)
+summary(df)
+```
+
+En este problema se analiza la eficacia de tres insecticidas (A, B y C) con el mismo precio. Para ello, se cuenta con información de 862 insectos, a los cuales se les asignó aleatoriamente un tipo de insecticida. Se registró la cantidad de insectos expuestos a cada tipo de insecticida, la dosis aplicada y el número de insectos que murieron. Nuestros principales objetivos son identificar si algún insecticida es mejor para eliminar el 70% de los insectos y ver si algunos de los insecticidas tienen comportamientos similares 
+
+Para comprender mejor la distribución de los datos, presentamos una gráfica de dispersión que muestra la proporción de insectos muertos según el insecticida aplicado.
+
+
+
+```{r gd, echo=FALSE, fig.width=5, fig.height=2, fig.align='center'} 
+df$PropKilled <- df$Killed / df$Number
+
+ggplot(df, aes(x = Deposit, y = PropKilled, color = Insecticide)) +
+  geom_point(size = 4) +  
+  labs(x = "Dosis de insecticida", y = "Proporción de insectos muertos") +
+  theme_minimal()
+```
+
+En la gráfica, observamos que los puntos azules correspondientes al insecticida C están por encima de los de los otros dos insecticidas. Esto sugiere que, probablemente, para matar una cantidad similar de insectos, se requiera una dosis menor del insecticida C. También se puede notar que los insecticidas A y B  tienen un comportamiento similar en la proporción de insectos muertos respecto a la dosis aplicada.
+
+
+Ahora vamos a intentar ajustar un modelo a este problema, considerando que y es si el insecto muere o no es decir una variable binaria, usando 3 ligas: logit, probit y cloglog y usando como covariables el tipo de insecticida y ln(Deposit)
+
+```{r nc, include=FALSE}
+df$lnD <- log(df$Deposit)
+df$lnD2 <- (log(df$Deposit))^2
+```
+
+```{r pi, include=FALSE}
+modelo_logit<- glm(cbind(Killed, Number- Killed) ~ Insecticide * lnD, data = df,
+                   family = binomial(link = "logit"))
+summary(modelo_logit)
+
+modelo_probit<- glm(cbind(Killed, Number- Killed) ~ Insecticide * lnD, data = df,
+                    family = binomial(link = "probit"))
+summary(modelo_probit)
+
+
+modelo_cloglog<- glm(cbind(Killed, Number- Killed) ~ Insecticide * lnD, data = df,
+                     family = binomial(link = "cloglog"))
+summary(modelo_cloglog)
+```
+Considerando a insecticida A como nuestro nivel de referencia nos queda lo siguiente:
+
+$$g(\mu_i)=\beta_0+\beta_1 I_B+\beta_2 I_C+\beta_3 lnD+\beta_4 I_BlnD + \beta_5 I_ClnD$$
+
+```{r pi2, include=FALSE, results='asis' }
+modelo_logit2<- glm(cbind(Killed, Number- Killed) ~ Insecticide * lnD + lnD2 * Insecticide, data = df,
+                   family = binomial(link = "logit"))
+summary(modelo_logit2) #AIC 94.59
+
+modelo_probit2<- glm(cbind(Killed, Number- Killed) ~ Insecticide * lnD + lnD2 * Insecticide, data = df,
+                    family = binomial(link = "probit"))
+summary(modelo_probit2)  #94.575
+
+
+modelo_cloglog2<- glm(cbind(Killed, Number- Killed) ~ Insecticide * lnD + lnD2 * Insecticide, data = df,
+                     family = binomial(link = "cloglog"))
+summary(modelo_cloglog2) #94.3
+```
+
+
+
+
+
+Por lo que con cada liga obtenemos los siguiente resultados:
+```{r TablaAIC, echo=FALSE, results='asis'}
+#Guardamos los datos
+data.frame("Tipo"=c("GLM","GLM","GLM"),
+           "Info.Adicional1" = c("Familia:Binomial","Familia:Binomial", "Familia:Binomial"),
+           "Info.Adicional2" = c("Liga:\nlogit", "Liga:\nprobit", "Liga:\ncloglog"), 
+          "AIC" = c(100.89, 100.61, 113.85))%>% 
+  #Volvemos tabla
+  kbl(booktabs = TRUE, align = "c") %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"))
+
+```
+
+
+
+
+Vemos qe el modelo con liga probit es el que tiene mejor AIC, sin embargo al analizar supuestos ninguno de los 3 modelos se adapta bien al modelo por lo que ahora probaremos agregando la interacción de insenticida con la covariable $lnD^2$, generando ahora los siguientes resultados:
+
+```{r TablaAIC2, echo=FALSE, results='asis'}
+#Guardamos los datos
+data.frame("Tipo"=c("GLM","GLM","GLM"),
+           "Info.Adicional1" = c("Familia:Binomial","Familia:Binomial", "Familia:Binomial"),
+           "Info.Adicional2" = c("Liga:\nlogit", "Liga:\nprobit", "Liga:\ncloglog"), 
+          "AIC" = c(94.59, 94.575, 94.3))%>% 
+  #Volvemos tabla
+  kbl(booktabs = TRUE, align = "c") %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"))
+
+```
+
+
+Notamos una mejora en los AIC de los 3 modelos y aunque son muy parecidos nos quedamos con el tercer modelo que es el que tiene el AIC más bajo.Esto por que el hecho de elevar al cuadrado a lnD hace que podamos meter una relación no lineal y así permitimos que el efecto de la dosis cambie de manera más compleja.  
+
+Ahora para ver si nos quedamos definitivamente con este modelo análizamos los supuestos
+
+```{r gd2, echo=FALSE, fig.width=8, fig.height=5, fig.align='center', warning=FALSE, message=FALSE} 
+library(DHARMa)  #Los residuales simulados también son útiles en este caso
+set.seed(123)
+fitlogitres <- simulateResiduals(fittedModel = modelo_cloglog2 )
+plot(fitlogitres) 
+```
+
+```{r cd2, include=FALSE}
+modelo_cloglog2_2<- glm(cbind(Killed, Number- Killed) ~ Insecticide + lnD + lnD2 + Insecticide, data = df,
+                      family = binomial(link = "cloglog"))
+
+summary(modelo_cloglog2_2) #94.3
+
+
+anova(modelo_cloglog2, modelo_cloglog2_2, test = "LRT")
+#no es mejor, entonces no lo ponemos 
+```
+
+
+
+Con esto observamos que en la gráfica QQ plot de los residuos, los triángulos se ajustan bastante bien a la línea diagonal. Además, en las pruebas estadísticas, los p-values son mayores a los niveles de significancia, lo que refuerza esta conclusión. Por otro lado, en la segunda gráfica vemos que las líneas negras no muestran tendencias fuertes, por lo que podemos concluir que el modelo se ajusta adecuadamente.
+
+
+Así que nuesto modelo con liga cloglog quedaría como:
+
+$$g(\mu_i)=\beta_0+\beta_1 I_B+\beta_2 I_C+\beta_3 lnD+\beta_4 lnD^2 + \beta_5 I_B lnD + \beta_6 I_C lnD + \beta_7 I_B lnD^2 + \beta_8 I_C lnD^2$$
+Sustituyendo los valores dados por el modelo;
+
+$$g(\mu_i)=-9.0717+2.3126 I_B+6.9121 I_C+9.6286 lnD -2.4908 lnD^2 -2.7378 I_B lnD -6.3201 I_C lnD + 0.8442 I_B lnD^2 + 1.6879 I_C lnD^2$$
+
+Para ver como se ajusta el modelo tenemos la siguiente gráfica:
+
+```{r gd22, echo=FALSE, fig.width=5, fig.height=2, fig.align='center', warning=FALSE, message=FALSE} 
+ 
+df$predicted <- predict(modelo_cloglog2, type = "response")
+
+ggplot(df, aes(x = Deposit, y = Killed / Number, color = Insecticide)) +
+  geom_point() + 
+  geom_line(aes(y = predicted), size = 1) +  
+  labs(x = "Dosis de insecticida", y = "Proporción de insectos muertos",
+       title = "Predicciones modelo 3 (cloglog)") +
+  theme_minimal()
+```
+
+Con lo cual confirmamos que el modelo se ajusta adecuadamente a los datos observados, en los tres tipos de insecticidas.
+
+Para cada insecnticida el modelo se ve como:
+$$\eta(I_A)=\beta_0 + \beta_3 lnD + \beta_4lnD^2$$
+$$\eta(I_B)=\beta_0 + \beta_1  + (\beta_3+\beta_5)lnD+(\beta_4+\beta_7)lnD^2$$
+$$\eta(I_C)=\beta_0 + \beta_2  + (\beta_3+\beta_6)lnD+(\beta_4+\beta_8)lnD^2$$
+
+Ya que tenemos un modelo que se ajusta bien calculamos la dosis mínima para cada insecticida con la que el 70% de los insectos muere, para esto resulvemos 3 sistemas de ecuaciones cuadraticas
+usando:
+
+ $$ ln(Dmin_{Ií})= \frac{ -b - \sqrt{b^2 - 4ac} }{2a} $$
+Para el insecticida A consideramos:
+
+$a=\beta_4 =-2.4908$, $b= \beta_3 =9.6286$ y $c= \beta_0-ln(-ln(1-0.7))=-9.2573$ obteniendo una dosis mínima de 6.0140
+
+
+Para el insecticida B consideramos:
+
+$a=\beta_4 + \beta_7=-1.6466$, $b= \beta_3+ \beta53=6.889$ y $c= \beta_0+\beta_1-ln(-ln(1-0.7))=-6.9447$ obteniendo una dosis mínima de 5.4406
+
+
+Para el insecticida C consideramos:
+
+$a=\beta_4 + \beta_8=-0.8029$, $b= \beta_3+ \beta_6=3.3085$ y $c= \beta_0+\beta_2-ln(-ln(1-0.7))=-2.3452$ obteniendo una dosis mínima de 2.4833
+
+
+Con esto en mente, ¿podemos afirmar que algún insecticida es mejor? Para responder a esta pregunta, consideramos que la dosis mínima es de 2.4833. Dado que el insecticida C presenta esta dosis mínima, evaluaremos si este es, en efecto, el mejor insecticida bajo dicha condición.
+
+
+
+Para esto queremos ver que:
+
+
+
+Para que el Insecticida C sea mejor al A
+$$\beta_0 + \beta_2 + (\beta_3+\beta_6)(0.9096)+ (\beta_4+\beta_8)(0.9096^2)>\beta_0+\beta_3(0.9096)+\beta_4(0.9096)^2$$
+$$\beta_2+0.9096\beta_6+(0.9096^2)\beta_8>0$$
+Para que el Insecticida C sea mejor al B
+$$\beta_0 + \beta_2 + (\beta_3+\beta_6)(0.9096)+ (\beta_4+\beta_8)(0.9096^2)> \beta_0 + \beta_1 + (\beta_3+\beta_5)(0.9096)+(\beta_4+\beta_7)(0.9096^2)$$
+$$-\beta_1+\beta_2-0.9096\beta_5+0.9096\beta_6-0.9096\beta_7+0.9096^2\beta_8>0$$
+Por lo que nuestra prueba de hipótesis simultanea queda como
+
+H0:$\beta_2+0.9096\beta_6+(0.9096^2)\beta_8\leq0$, $-\beta_1+\beta_2-0.9096\beta_5+0.9096\beta_6-0.9096\beta_7+0.9096^2\beta_8\leq0$ vs
+
+
+Ha:$\beta_2+0.9096\beta_6+(0.9096^2)\beta_8>0$, $-\beta_1+\beta_2-0.9096\beta_5+0.9096\beta_6-0.9096\beta_7+0.9096^2\beta_8>0$
+
+Donde obetenmos lo siguiente:
+```{r ph1, echo=FALSE}
+k=matrix(c(0,0,1,0,0,0,0.9096,0,0.9096^2
+           ,0,-1,1,0,0,-0.9096,0.9096,-(0.9069)^2,0.9096^2), ncol =9, nrow = 2, byrow = TRUE)
+m=matrix(c(0,
+           0), ncol =1, nrow = 2, byrow = TRUE)
+summary(glht(modelo_cloglog2, linfct = k, rhs=m, alternative="greater"))
+```
+
+Como ambos p-values son menores que el nivel de significancia del modelo, podemos concluir que, tomando en cuenta la dosis mínima, el insecticida C es mejor que los otros dos. Es decir, se requiere una menor dosis del insecticida C para eliminar el 70% una cierta cantidad de insectos en comparación con los otros dos insecticidas
+
+Por último vamos a ver los insecticidas A y B tienen un desempeño similar y para esto se necesita que: 
+
+$$\eta(I_A)=\beta_0 + \beta_3 lnD + \beta_4lnD^2 = \beta_0 + \beta_1  + (\beta_3+\beta_5)lnD+(\beta_4+\beta_7)lnD^2 =\eta(I_B)$$
+
+Para esto planteamos las hipótesis:
+
+H0:$\beta_1=0, \beta_5=0, \beta_7=0$ vs Ha:$\beta_1\neq0, \beta_5\neq0, \beta_7\neq0$
+
+
+```{r ph2, echo=FALSE}
+K2=matrix(c(0,1,0,0,0,0,0,0,0,
+           0,0,0,0,0,1,0,0,0,
+           0,0,0,0,0,0,0,1,0), ncol=9, nrow=3, byrow=TRUE)
+m2=c(0,0,0)
+summary(glht(modelo_cloglog2, linfct=K2, rhs=m2), test=Chisqtest()) 
+```
+Por lo que no se rechaza H0 y entonces es plausible pensar que los insecticidas A y B se comportan iguales.
+
+
+
+
+
+
